@@ -1,128 +1,137 @@
 const express = require('express');
-const mongoose = require('mongoose');
+const { MongoClient } = require('mongodb');
 const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 // Middleware
-app.use(cors({
-  origin: '*', // Allow all origins temporarily
-  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-  credentials: true
-}));
+app.use(cors());
 app.use(express.json());
 
-// MongoDB Connection - SIMPLIFIED
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://sravan:123@cluster0.iskt5ms.mongodb.net/ckhiring?retryWrites=true&w=majority';
+// MongoDB Connection
+const MONGODB_URI = 'mongodb+srv://sravan:123@cluster0.iskt5ms.mongodb.net/ckhiring?retryWrites=true&w=majority';
 
-console.log('🔗 Connecting to MongoDB...');
+let db = null;
+let isConnected = false;
 
-mongoose.connect(MONGODB_URI)
-  .then(() => {
-    console.log('✅ MongoDB Connected Successfully!');
-  })
-  .catch((error) => {
-    console.log('❌ MongoDB Connection Failed:', error.message);
-  });
+// Connect to MongoDB
+async function connectToDatabase() {
+    try {
+        console.log('🔗 Connecting to MongoDB...');
+        const client = new MongoClient(MONGODB_URI);
+        await client.connect();
+        db = client.db('ckhiring');
+        isConnected = true;
+        console.log('✅ MongoDB Connected Successfully!');
+    } catch (error) {
+        console.error('❌ MongoDB Connection Failed:', error.message);
+        isConnected = false;
+    }
+}
 
-// Job Schema
-const jobSchema = new mongoose.Schema({
-  title: String,
-  location: String,
-  description: String,
-  postedDate: { type: Date, default: Date.now }
-});
-
-const Job = mongoose.model('Job', jobSchema);
+// Initialize connection
+connectToDatabase();
 
 // Routes
 
 // Get all jobs
 app.get('/api/jobs', async (req, res) => {
-  try {
-    // Check if database is connected
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(500).json({ 
-        error: 'Database not connected',
-        jobs: [] // Return empty array instead of error
-      });
+    try {
+        if (!isConnected) {
+            return res.json([]);
+        }
+        const jobs = await db.collection('jobs').find().sort({ postedDate: -1 }).toArray();
+        res.json(jobs);
+    } catch (error) {
+        console.error('Error fetching jobs:', error);
+        res.json([]);
     }
-    
-    const jobs = await Job.find().sort({ postedDate: -1 });
-    res.json(jobs);
-  } catch (error) {
-    console.error('Error fetching jobs:', error);
-    // Return empty array instead of error
-    res.json([]);
-  }
 });
 
 // Create new job
 app.post('/api/jobs', async (req, res) => {
-  try {
-    // Check if database is connected
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(500).json({ 
-        error: 'Database not connected. Please try again.'
-      });
+    try {
+        if (!isConnected) {
+            return res.status(500).json({ error: 'Database not connected' });
+        }
+        
+        const jobData = {
+            ...req.body,
+            postedDate: new Date()
+        };
+        
+        const result = await db.collection('jobs').insertOne(jobData);
+        res.status(201).json({ ...jobData, _id: result.insertedId });
+    } catch (error) {
+        console.error('Error creating job:', error);
+        res.status(500).json({ error: error.message });
     }
-    
-    const { title, location, description } = req.body;
-    
-    const newJob = new Job({
-      title,
-      location,
-      description
-    });
-
-    const savedJob = await newJob.save();
-    res.status(201).json(savedJob);
-  } catch (error) {
-    console.error('Error creating job:', error);
-    res.status(500).json({ 
-      error: 'Failed to create job: ' + error.message 
-    });
-  }
 });
 
 // Delete job
 app.delete('/api/jobs/:id', async (req, res) => {
-  try {
-    const deletedJob = await Job.findByIdAndDelete(req.params.id);
-    if (!deletedJob) {
-      return res.status(404).json({ message: 'Job not found' });
+    try {
+        if (!isConnected) {
+            return res.status(500).json({ error: 'Database not connected' });
+        }
+        
+        const result = await db.collection('jobs').deleteOne({ _id: new require('mongodb').ObjectId(req.params.id) });
+        
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'Job not found' });
+        }
+        
+        res.json({ message: 'Job deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
-    res.json({ message: 'Job deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
 });
 
-// Root route
-app.get('/', (req, res) => {
-  const dbStatus = mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected';
-  res.json({ 
-    message: 'CK Hiring Solutions Backend API is running!',
-    database: dbStatus,
-    status: 'Active',
-    timestamp: new Date().toISOString()
-  });
+// Test MongoDB connection
+app.get('/test-mongo', async (req, res) => {
+    try {
+        if (isConnected) {
+            await db.command({ ping: 1 });
+            res.json({ 
+                status: 'SUCCESS', 
+                message: 'MongoDB is connected and working!',
+                database: 'ckhiring'
+            });
+        } else {
+            res.json({ 
+                status: 'FAILED', 
+                message: 'MongoDB is not connected'
+            });
+        }
+    } catch (error) {
+        res.json({ 
+            status: 'ERROR', 
+            message: 'MongoDB test failed',
+            error: error.message
+        });
+    }
 });
 
 // Health check
 app.get('/health', (req, res) => {
-  const dbStatus = mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected';
-  res.json({ 
-    status: 'OK',
-    database: dbStatus,
-    readyState: mongoose.connection.readyState,
-    timestamp: new Date().toISOString()
-  });
+    res.json({
+        status: 'OK',
+        database: isConnected ? 'Connected' : 'Disconnected',
+        timestamp: new Date().toISOString()
+    });
 });
 
-// Start server
+// Root
+app.get('/', (req, res) => {
+    res.json({
+        message: 'CK Hiring Solutions API - Updated Version',
+        database: isConnected ? 'Connected' : 'Disconnected',
+        status: 'Running'
+    });
+});
+
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 MongoDB Status: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'}`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📊 MongoDB: ${isConnected ? 'Connected' : 'Disconnected'}`);
 });
