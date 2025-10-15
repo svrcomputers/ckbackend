@@ -70,22 +70,41 @@ app.post('/api/jobs', async (req, res) => {
 });
 
 // Delete job
+// FIXED DELETE Route - Add this to your server.js
 app.delete('/api/jobs/:id', async (req, res) => {
-    try {
-        if (!isConnected) {
-            return res.status(500).json({ error: 'Database not connected' });
-        }
-        
-        const result = await db.collection('jobs').deleteOne({ _id: new require('mongodb').ObjectId(req.params.id) });
-        
-        if (result.deletedCount === 0) {
-            return res.status(404).json({ error: 'Job not found' });
-        }
-        
-        res.json({ message: 'Job deleted successfully' });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+  try {
+    const jobId = req.params.id;
+    console.log('🗑️ Attempting to delete job:', jobId);
+    
+    // Check if database is connected
+    if (mongoose.connection.readyState !== 1) {
+      console.log('❌ Database not connected');
+      return res.status(500).json({ message: 'Database not connected' });
     }
+
+    // Use mongoose's built-in ID validation
+    if (!mongoose.Types.ObjectId.isValid(jobId)) {
+      console.log('❌ Invalid job ID format:', jobId);
+      return res.status(400).json({ message: 'Invalid job ID format' });
+    }
+
+    // Delete the job
+    const deletedJob = await Job.findByIdAndDelete(jobId);
+    
+    if (!deletedJob) {
+      console.log('❌ Job not found:', jobId);
+      return res.status(404).json({ message: 'Job not found' });
+    }
+    
+    console.log('✅ Job deleted successfully:', jobId);
+    res.json({ message: 'Job deleted successfully' });
+    
+  } catch (error) {
+    console.error('❌ Error in DELETE route:', error);
+    res.status(500).json({ 
+      message: 'Internal server error: ' + error.message 
+    });
+  }
 });
 
 // Test MongoDB connection
